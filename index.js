@@ -16,41 +16,44 @@ app.get('/health', (req, res) => {
   res.status(200).json({ status: 'OK' });
 });
 
-// Store active users
-const activeUsers = {};
-
 io.on('connection', (socket) => {
   console.log('A user connected:', socket.id);
-  
-  socket.on('join', (username) => {
-    console.log(`${username} joined with ID: ${socket.id}`);
-    activeUsers[socket.id] = username;
-    io.emit('activeUsers', Object.entries(activeUsers).map(([id, name]) => ({ id, username: name })));
+
+  // Handle user joining a room
+  socket.on('join-room', ({ roomId, username }) => {
+    socket.join(roomId);
+    console.log(`${username} joined room ${roomId} with ID: ${socket.id}`);
+
+    // Notify other users in the room about the new user
+    socket.to(roomId).emit('user-connected', socket.id);
+
+    // Send the list of current users in the room to the new user
+    const usersInRoom = Array.from(io.sockets.adapter.rooms.get(roomId) || []).filter(
+      (id) => id !== socket.id
+    );
+    socket.emit('current-users', usersInRoom);
   });
-  
-  socket.on('callUser', ({ userToCall, signalData, name }) => {
-    console.log(`${name} is calling ${activeUsers[userToCall]}`);
-    io.to(userToCall).emit('callIncoming', { signal: signalData });
+
+  // Handle WebRTC signaling
+  socket.on('offer', ({ roomId, offer }) => {
+    console.log(`Offer sent in room ${roomId} from ${socket.id}`);
+    socket.to(roomId).emit('offer', { offer, from: socket.id });
   });
-  
-  socket.on('answerCall', (data) => {
-    console.log(`Call answered by ${activeUsers[socket.id]}`);
-    io.to(data.to).emit('callAccepted', data.signal);
+
+  socket.on('answer', ({ roomId, answer }) => {
+    console.log(`Answer sent in room ${roomId} from ${socket.id}`);
+    socket.to(roomId).emit('answer', { answer, from: socket.id });
   });
-  
-  socket.on('ice-candidate', ({ target, candidate }) => {
-    io.to(target).emit('ice-candidate', { from: socket.id, candidate });
+
+  socket.on('ice-candidate', ({ roomId, candidate }) => {
+    console.log(`ICE candidate sent in room ${roomId} from ${socket.id}`);
+    socket.to(roomId).emit('ice-candidate', { candidate, from: socket.id });
   });
-  
-  socket.on('endCall', ({ to }) => {
-    console.log(`Call ended by ${activeUsers[socket.id]}`);
-    io.to(to).emit('callEnded');
-  });
-  
+
+  // Handle disconnection
   socket.on('disconnect', () => {
-    console.log(`User disconnected: ${activeUsers[socket.id]}`);
-    delete activeUsers[socket.id];
-    io.emit('activeUsers', Object.entries(activeUsers).map(([id, name]) => ({ id, username: name })));
+    console.log('User disconnected:', socket.id);
+    socket.broadcast.emit('user-disconnected', socket.id);
   });
 });
 
